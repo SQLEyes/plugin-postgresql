@@ -1,6 +1,7 @@
 package plugin_postgresql
 
 import (
+	"fmt"
 	. "github.com/sqleyes/engine"
 	"github.com/sqleyes/engine/abstract"
 	"github.com/sqleyes/engine/util"
@@ -10,6 +11,7 @@ type PostgreSQL struct {
 	abstract.Plugin
 	BPFFilter string
 	Device    string
+	packet    []byte
 }
 
 func (p *PostgreSQL) React(msg any) (command abstract.Command) {
@@ -19,6 +21,8 @@ func (p *PostgreSQL) React(msg any) (command abstract.Command) {
 		command = abstract.Start
 	case abstract.Broken:
 		plugin.Infof("%s:%d->%s:%d", v.SrcIP, v.SrcPort, v.DstIP, v.DstPort)
+		p.Handle(v.Payload)
+		fmt.Println()
 	case abstract.ERROR:
 		plugin.Errorf("%s \t", v.Text)
 	}
@@ -35,6 +39,10 @@ type Sql struct {
 }
 
 func (p *PostgreSQL) Handle(pkt []byte) {
+	if len(p.packet) != 0 {
+		pkt = append(p.packet, pkt...)
+		p.packet = p.packet[:0]
+	}
 	buffer := util.NewByteBuffer(pkt)
 	for buffer.HasNext() {
 		r := Sql{}
@@ -51,9 +59,15 @@ func (p *PostgreSQL) Handle(pkt []byte) {
 			r.Text = BaseHandle(buffer)
 		case 0x44:
 			r.Type = "Data row"
-			r.Text = DataRowHandle(buffer)
+			r.Text = p.DataRowHandle(buffer)
+		case 0x45:
+			r.Type = "Error"
+			r.Text = ErrorHandle(buffer)
 		case 0x4b:
 			r.Type = "Backend key data"
+			r.Text = BaseHandle(buffer)
+		case 0x4e:
+			r.Type = "Notice"
 			r.Text = BaseHandle(buffer)
 		case 0x5a:
 			r.Type = "Ready for query"
@@ -74,11 +88,29 @@ func (p *PostgreSQL) Handle(pkt []byte) {
 			return
 		default:
 			r.Type = "Unknown"
+			r.Text = "Unknown Data"
 		}
-		plugin.Infof("%s->%s", r.Type, r.Text)
+		if r.Text != "" {
+			plugin.Infof("%s->%s", r.Type, r.Text)
+
+		}
 	}
 }
 func BaseHandle(buffer *util.ByteBuffer) string {
 	length := int64(buffer.GetInt32())
 	return buffer.GetString(length - 4)
+}
+func ErrorHandle(buffer *util.ByteBuffer) string {
+	length := int64(buffer.GetInt32())
+	severity := buffer.GetString(7)
+	text := buffer.GetString(7)
+	code := buffer.GetString(7)
+	msg := buffer.GetString(length - 4 - 7 - 7 - 7 - 4 - 13 - 5 - 27)
+
+	postition := buffer.GetString(4)
+	file := buffer.GetString(13)
+	line := buffer.GetString(5)
+	routine := buffer.GetString(27)
+
+	return fmt.Sprintln(severity, text, code, msg, postition, file, line, routine)
 }

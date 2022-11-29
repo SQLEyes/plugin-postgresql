@@ -2,6 +2,8 @@ package plugin_postgresql
 
 import "github.com/sqleyes/engine/util"
 
+type ZB string
+
 func RowDescriptionHandle(buffer *util.ByteBuffer) (r string) {
 	//length :=
 	buffer.GetInt32()
@@ -22,14 +24,24 @@ func RowDescriptionHandle(buffer *util.ByteBuffer) (r string) {
 	}
 	return
 }
-func DataRowHandle(buffer *util.ByteBuffer) (r string) {
-	buffer.GetInt32()
+func (p *PostgreSQL) DataRowHandle(buffer *util.ByteBuffer) (r string) {
+	rowLen := buffer.GetInt32()
+	if buffer.Position()+int64(rowLen) > buffer.Len() {
+		buffer.Position(-5)
+		p.packet = buffer.ReadEnd()
+		return ""
+	}
 	columnSize := buffer.GetInt16()
 	i := 0
 	for i < int(columnSize) {
-		length := buffer.GetInt32()
-		r += buffer.GetString(int64(length)) + "\t"
 		i++
+		length := buffer.GetInt32()
+		if length == -1 {
+			r += "NULL\t"
+			continue
+		}
+		r += buffer.GetString(int64(length)) + "\t"
+
 	}
 	return
 }
