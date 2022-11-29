@@ -2,29 +2,30 @@ package plugin_postgresql
 
 import (
 	. "engine"
-	"engine/config"
+	"engine/abstract"
 	"engine/util"
 )
 
 type PostgreSQL struct {
-	config.Plugin
+	abstract.Plugin
 	BPFFilter string
 	Device    string
 }
 
-func (p *PostgreSQL) React(msg any) {
+func (p *PostgreSQL) React(msg any) (command abstract.Command) {
 	switch v := msg.(type) {
-	case config.Installed:
+	case abstract.Installed:
 		plugin.Infof("%s", v.Text)
-	case config.Broken:
+		command = abstract.Start
+	case abstract.Broken:
 		plugin.Infof("%s:%d->%s:%d", v.SrcIP, v.SrcPort, v.DstIP, v.DstPort)
-	case config.ERROR:
+	case abstract.ERROR:
 		plugin.Errorf("%s \t", v.Text)
 	}
-
+	return
 }
 
-var c = PostgreSQL{BPFFilter: "tcp and port 5432", Device: "\\Device\\NPF_{8AAAA995-A1E9-4493-B984-2E6D03F06143}"}
+var c = PostgreSQL{}
 
 var plugin = InstallPlugin(&c)
 
