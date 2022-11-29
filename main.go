@@ -1,9 +1,9 @@
 package plugin_postgresql
 
 import (
-	. "engine"
-	"engine/abstract"
-	"engine/util"
+	. "github.com/sqleyes/engine"
+	"github.com/sqleyes/engine/abstract"
+	"github.com/sqleyes/engine/util"
 )
 
 type PostgreSQL struct {
