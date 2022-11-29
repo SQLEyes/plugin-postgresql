@@ -1,6 +1,6 @@
 package plugin_postgresql
 
-import "engine/util"
+import "github.com/sqleyes/engine/util"
 
 func RowDescriptionHandle(buffer *util.ByteBuffer) (r string) {
 	//length :=
