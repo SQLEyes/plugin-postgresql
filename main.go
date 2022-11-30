@@ -5,6 +5,7 @@ import (
 	. "github.com/sqleyes/engine"
 	"github.com/sqleyes/engine/abstract"
 	"github.com/sqleyes/engine/util"
+	"strings"
 )
 
 type PostgreSQL struct {
@@ -20,9 +21,7 @@ func (p *PostgreSQL) React(msg any) (command abstract.Command) {
 		plugin.Infof("%s", v.Text)
 		command = abstract.Start
 	case abstract.Broken:
-		plugin.Infof("%s:%d->%s:%d", v.SrcIP, v.SrcPort, v.DstIP, v.DstPort)
-		p.Handle(v.Payload)
-		fmt.Println()
+		p.Handle(v)
 	case abstract.ERROR:
 		plugin.Errorf("%s \t", v.Text)
 	}
@@ -38,12 +37,16 @@ type Sql struct {
 	Text string
 }
 
-func (p *PostgreSQL) Handle(pkt []byte) {
+func (p *PostgreSQL) Handle(broken abstract.Broken) {
+	Source := "Client"
+	if strings.Index(p.BPFFilter, fmt.Sprintf("%d", broken.SrcPort)) != -1 {
+		Source = "Server"
+	}
 	if len(p.packet) != 0 {
-		pkt = append(p.packet, pkt...)
+		broken.Payload = append(p.packet, broken.Payload...)
 		p.packet = p.packet[:0]
 	}
-	buffer := util.NewByteBuffer(pkt)
+	buffer := util.NewByteBuffer(broken.Payload)
 	for buffer.HasNext() {
 		r := Sql{}
 		head := buffer.ReadShort()
@@ -91,7 +94,7 @@ func (p *PostgreSQL) Handle(pkt []byte) {
 			r.Text = "Unknown Data"
 		}
 		if r.Text != "" {
-			plugin.Infof("%s->%s", r.Type, r.Text)
+			plugin.Infof("%s->%s", Source, r.Text)
 
 		}
 	}
