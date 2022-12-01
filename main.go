@@ -38,60 +38,66 @@ type Sql struct {
 }
 
 func (p *PostgreSQL) Handle(broken abstract.Broken) {
+	defer func() {
+		//捕获异常
+		err := recover()
+		if err != nil { //条件判断，是否存在异常
+			//存在异常,抛出异常
+			plugin.Infof("system error %s", err)
+		}
+	}()
 	Source := "Client"
 	if strings.Index(p.BPFFilter, fmt.Sprintf("%d", broken.SrcPort)) != -1 {
 		Source = "Server"
 	}
-	if len(p.packet) != 0 {
+	if len(p.packet) != 0 && Source == "Source" {
 		broken.Payload = append(p.packet, broken.Payload...)
 		p.packet = p.packet[:0]
 	}
 	buffer := util.NewByteBuffer(broken.Payload)
+
 	for buffer.HasNext() {
 		r := Sql{}
 		head := buffer.ReadShort()
+		if buffer.Position()+4 > buffer.Len() {
+			if Source == "Source" {
+				p.packet = buffer.ReadEnd()
+			}
+			return
+		}
+		length := int64(buffer.GetInt32())
+		if length < 0 {
+			return
+		}
+		if buffer.Position(-4)+length > buffer.Len() {
+			if Source == "Source" {
+				p.packet = buffer.ReadEnd()
+			}
+			return
+		}
 		switch head {
-		case 0x54:
-			r.Type = "Row description"
-			r.Text = RowDescriptionHandle(buffer)
-		case 0x51:
+		case 0x51, 0x50:
 			r.Type = "Simple query"
-			r.Text = BaseHandle(buffer)
+			r.Text = p.BaseHandle(buffer)
 		case 0x43:
 			r.Type = "Command completion"
-			r.Text = BaseHandle(buffer)
-		case 0x44:
-			r.Type = "Data row"
-			r.Text = p.DataRowHandle(buffer)
+			r.Text = p.BaseHandle(buffer)
+			if length == 10 {
+				continue
+			}
 		case 0x45:
 			r.Type = "Error"
-			r.Text = ErrorHandle(buffer)
-		case 0x4b:
-			r.Type = "Backend key data"
-			r.Text = BaseHandle(buffer)
+			r.Text = p.ErrorHandle(buffer)
 		case 0x4e:
 			r.Type = "Notice"
-			r.Text = BaseHandle(buffer)
-		case 0x5a:
-			r.Type = "Ready for query"
-			r.Text = BaseHandle(buffer)
-		case 0x52:
-			r.Type = "Authentication request"
-			//r.Text = BaseHandle(stream)
-			return
-		case 0x70:
-			r.Type = "Password message"
-			//r.Text = BaseHandle(stream)
+			r.Text = p.BaseHandle(buffer)
+		case 0x00:
 			return
 		case 0x53:
-			r.Type = "Parameter status"
-			r.Text = BaseHandle(buffer)
-		case 0x0:
-			r.Type = "Startup message"
 			return
 		default:
-			r.Type = "Unknown"
-			r.Text = "Unknown Data"
+			r.Text = ""
+			p.BaseHandle(buffer)
 		}
 		if r.Text != "" {
 			plugin.Infof("%s->%s", Source, r.Text)
@@ -99,21 +105,32 @@ func (p *PostgreSQL) Handle(broken abstract.Broken) {
 		}
 	}
 }
-func BaseHandle(buffer *util.ByteBuffer) string {
+func (p *PostgreSQL) BaseHandle(buffer *util.ByteBuffer) string {
 	length := int64(buffer.GetInt32())
 	return buffer.GetString(length - 4)
 }
-func ErrorHandle(buffer *util.ByteBuffer) string {
+func (p *PostgreSQL) ErrorHandle(buffer *util.ByteBuffer) string {
 	length := int64(buffer.GetInt32())
-	severity := buffer.GetString(7)
-	text := buffer.GetString(7)
-	code := buffer.GetString(7)
-	msg := buffer.GetString(length - 4 - 7 - 7 - 7 - 4 - 13 - 5 - 27)
-
-	postition := buffer.GetString(4)
-	file := buffer.GetString(13)
-	line := buffer.GetString(5)
-	routine := buffer.GetString(27)
+	if length < 20 {
+		buffer.Read(length - 4)
+		return ""
+	}
+	buffer.ReadShort()
+	severity := buffer.GetString(7 - 1)
+	buffer.ReadShort()
+	text := buffer.GetString(7 - 1)
+	buffer.ReadShort()
+	code := buffer.GetString(7 - 1)
+	buffer.ReadShort()
+	msg := buffer.GetString(length - 4 - 7 - 7 - 7 - 4 - 13 - 5 - 27 - 1)
+	buffer.ReadShort()
+	postition := buffer.GetString(4 - 1)
+	buffer.ReadShort()
+	file := buffer.GetString(13 - 1)
+	buffer.ReadShort()
+	line := buffer.GetString(5 - 1)
+	buffer.ReadShort()
+	routine := buffer.GetString(27 - 1)
 
 	return fmt.Sprintln(severity, text, code, msg, postition, file, line, routine)
 }
