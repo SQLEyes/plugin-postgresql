@@ -12,12 +12,15 @@ type PostgreSQL struct {
 	abstract.Plugin
 	BPFFilter string
 	Device    string
-	packet    []byte
+	server    map[string][]byte
+	client    map[string][]byte
 }
 
 func (p *PostgreSQL) React(msg any) (command abstract.Command) {
 	switch v := msg.(type) {
 	case abstract.Installed:
+		p.server = make(map[string][]byte)
+		p.client = make(map[string][]byte)
 		plugin.Infof("%s", v.Text)
 		command = abstract.Start
 	case abstract.Broken:
@@ -46,22 +49,34 @@ func (p *PostgreSQL) Handle(broken abstract.Broken) {
 			plugin.Infof("system error %s", err)
 		}
 	}()
+
 	Source := "Client"
 	if strings.Index(p.BPFFilter, fmt.Sprintf("%d", broken.SrcPort)) != -1 {
 		Source = "Server"
 	}
-	if len(p.packet) != 0 && Source == "Source" {
-		broken.Payload = append(p.packet, broken.Payload...)
-		p.packet = p.packet[:0]
+	serverKey := fmt.Sprintf("%s_%s_%d", broken.SrcIP, broken.DstIP, broken.DstPort)
+	clientKey := fmt.Sprintf("%s_%d", broken.DstIP, broken.DstPort)
+	if len(p.server[serverKey]) != 0 && Source == "Server" {
+		broken.Payload = append(p.server[serverKey], broken.Payload...)
+		p.server[serverKey] = []byte{}
+	}
+	if len(p.client[clientKey]) != 0 && Source == "Client" {
+		broken.Payload = append(p.client[clientKey], broken.Payload...)
+		p.client[clientKey] = []byte{}
 	}
 	buffer := util.NewByteBuffer(broken.Payload)
 
 	for buffer.HasNext() {
 		r := Sql{}
 		head := buffer.ReadShort()
+		if head == 0x00 {
+			return
+		}
 		if buffer.Position()+4 > buffer.Len() {
-			if Source == "Source" {
-				p.packet = buffer.ReadEnd()
+			if Source == "Server" {
+				p.server[serverKey] = buffer.ReadEnd()
+			} else {
+				p.client[clientKey] = buffer.ReadEnd()
 			}
 			return
 		}
@@ -70,10 +85,15 @@ func (p *PostgreSQL) Handle(broken abstract.Broken) {
 			return
 		}
 		if buffer.Position(-4)+length > buffer.Len() {
-			if Source == "Source" {
-				p.packet = buffer.ReadEnd()
+			if Source == "Server" {
+				buffer.Position(-1)
+				p.server[serverKey] = buffer.ReadEnd()
+			} else {
+				buffer.Position(-1)
+				p.client[clientKey] = buffer.ReadEnd()
 			}
 			return
+
 		}
 		switch head {
 		case 0x51, 0x50:
@@ -100,13 +120,21 @@ func (p *PostgreSQL) Handle(broken abstract.Broken) {
 			p.BaseHandle(buffer)
 		}
 		if r.Text != "" {
-			plugin.Infof("%s->%s", Source, r.Text)
-
+			if strings.Index(r.Text, "insert into") != -1 {
+				t1 := r.Text[0:strings.Index(r.Text, "values")]
+				r.Text = r.Text[strings.Index(r.Text, "values"):]
+				t2 := r.Text[0:strings.Index(r.Text, ")")]
+				r.Text = t1 + t2 + ")..."
+			}
+			plugin.Infof("[serv->%s:%d]->[client->%s:%d]: %s", broken.SrcIP, broken.SrcPort, broken.DstIP, broken.DstPort, r.Text)
 		}
 	}
 }
 func (p *PostgreSQL) BaseHandle(buffer *util.ByteBuffer) string {
 	length := int64(buffer.GetInt32())
+	if buffer.Position()+length > buffer.Len() {
+		return string(buffer.ReadEnd())
+	}
 	return buffer.GetString(length - 4)
 }
 func (p *PostgreSQL) ErrorHandle(buffer *util.ByteBuffer) string {
